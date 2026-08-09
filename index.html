@@ -112,6 +112,10 @@ ul.clean{padding-left:20px; margin:.4em 0} ul.clean li{margin:.25em 0}
 .timer .num{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   font-size:32px; font-weight:700; color:var(--brand-dark)}
 .media-frame{position:relative; width:100%; max-width:840px; margin:0 auto}
+.media-loading{display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+  padding:60px 16px; border:1px dashed var(--line); border-radius:14px; background:#fff; min-height:220px}
+.media-loading .loadtxt{font-weight:700; color:var(--brand-dark); font-size:16.5px}
+.media-loading .loadhint{font-size:13.5px; color:var(--muted); text-align:center; max-width:340px; line-height:1.5}
 .media-img{width:100%; display:block; border-radius:14px; border:1px solid var(--line);
   box-shadow:var(--shadow); cursor:zoom-in}
 .nodrag{ -webkit-user-drag:none; user-select:none }
@@ -174,6 +178,8 @@ const CONFIG = {
   // URL ของ Google Apps Script Web App (วางหลังจาก Deploy แล้ว)
   ENDPOINT: "https://script.google.com/macros/s/AKfycbwl085imyqYrk8hev0imEtQpxeZJlPwwu29syWAekDrE4Ts7B0dV9BtAi4P2utc2otW/exec",
   // รูปสื่ออินโฟกราฟิก: A = แบบเดิม, B = แบบใหม่ (วางไฟล์ในโฟลเดอร์ images/)
+  // เปลี่ยนเลขนี้ทุกครั้งที่อัปโหลดรูปโปสเตอร์ทับไฟล์เดิม (กันผู้ตอบเห็นรูปเก่าค้างใน cache)
+  IMAGE_VERSION: "1",
   IMAGE_A: "images/group-a.jpg",
   IMAGE_B: "images/group-b.jpg",
   // ระยะเวลาบังคับรับชมสื่อ (วินาที)
@@ -472,27 +478,40 @@ function screenPart1(){
 // --- 3.2 ส่วนที่ 2 (ก): รับชมสื่อ 15 วินาที ---
 function screenMedia(){
   setStep(2);
-  const img = GROUP==='A' ? CONFIG.IMAGE_A : CONFIG.IMAGE_B;
+  const baseImg = GROUP==='A' ? CONFIG.IMAGE_A : CONFIG.IMAGE_B;
+  // ต่อท้ายเลขเวอร์ชันรูป เพื่อให้ผู้ตอบได้รูปล่าสุดเสมอแม้เคยเปิดหน้านี้มาก่อน
+  const img = baseImg + (CONFIG.IMAGE_VERSION ? '?v=' + encodeURIComponent(CONFIG.IMAGE_VERSION) : '');
   const total = CONFIG.VIEW_SECONDS;
   go(`
   <div class="screen">
     <div class="card media-stage media-card">
       <h2>รับชมสื่ออินโฟกราฟิก</h2>
       <p class="small">โปรดตั้งใจดูสื่อให้ละเอียด ระบบจะเริ่มแบบทดสอบโดยอัตโนมัติเมื่อหมดเวลา และท่าน<strong>ไม่สามารถย้อนกลับมาดูสื่อได้อีก</strong></p>
-      <div class="timer">
+
+      <div class="timer" id="timerWrap" style="display:none">
         <svg width="88" height="88"><circle cx="44" cy="44" r="38" stroke="#EFE7E0" stroke-width="8" fill="none"/>
           <circle id="ring" cx="44" cy="44" r="38" stroke="#E8551A" stroke-width="8" fill="none"
             stroke-linecap="round" stroke-dasharray="${(2*Math.PI*38).toFixed(1)}" stroke-dashoffset="0"/></svg>
         <div class="num" id="cd">${total}</div>
       </div>
+
       <div class="media-frame">
+        <!-- ระหว่างโหลดรูป: ยังไม่เริ่มจับเวลา -->
+        <div class="media-loading" id="mediaLoading">
+          <div class="spinner"></div>
+          <div class="loadtxt">กำลังโหลดสื่อ...</div>
+          <div class="loadhint" id="loadHint">ระบบจะเริ่มจับเวลา 15 วินาที เมื่อภาพแสดงครบถ้วนแล้วเท่านั้น</div>
+        </div>
         <img class="media-img nodrag" id="mediaImg" src="${img}" alt="สื่ออินโฟกราฟิก กลุ่ม ${GROUP}"
-          oncontextmenu="return false"
-          onerror="this.style.display='none';document.getElementById('imgErr').style.display='block';document.getElementById('zoomHint').style.display='none'"/>
-        <div id="imgErr" style="display:none" class="notice">ไม่พบไฟล์รูปสื่อ — โปรดวางไฟล์ <code>${esc(img)}</code> (ดูคู่มือ README)</div>
+             style="display:none" oncontextmenu="return false"/>
+        <div id="imgErr" style="display:none" class="notice">
+          โหลดรูปสื่อไม่สำเร็จ — โปรดตรวจสอบการเชื่อมต่ออินเทอร์เน็ต
+          <div class="btnrow"><button class="btn ghost" id="btnImgRetry">ลองโหลดใหม่</button></div>
+        </div>
       </div>
-      <div><span class="zoom-hint" id="zoomHint">🔍 แตะที่ภาพเพื่อขยายดูชัด ๆ เต็มจอ</span></div>
-      <div class="lockhint">⏱ ไม่สามารถกดข้ามได้ · เหลือเวลา <span id="cd2">${total}</span> วินาที</div>
+
+      <div><span class="zoom-hint" id="zoomHint" style="display:none">🔍 แตะที่ภาพเพื่อขยายดูชัด ๆ เต็มจอ</span></div>
+      <div class="lockhint" id="lockHint" style="display:none">⏱ ไม่สามารถกดข้ามได้ · เหลือเวลา <span id="cd2">${total}</span> วินาที</div>
     </div>
   </div>
   <div class="lightbox" id="lightbox" role="dialog" aria-label="ขยายรูปสื่อ">
@@ -501,39 +520,81 @@ function screenMedia(){
     <div class="lb-inner"><img src="${img}" alt="สื่ออินโฟกราฟิก กลุ่ม ${GROUP}" oncontextmenu="return false"/></div>
   </div>`);
 
-  // ----- ขยายรูป (lightbox) -----
-  const lb = document.getElementById('lightbox');
-  const openLb = ()=>{ if(document.getElementById('mediaImg').style.display!=='none') lb.classList.add('open'); };
-  const closeLb = ()=>lb.classList.remove('open');
-  document.getElementById('mediaImg').addEventListener('click', openLb);
-  document.getElementById('zoomHint').addEventListener('click', openLb);
-  document.getElementById('lbClose').addEventListener('click', e=>{ e.stopPropagation(); closeLb(); });
-  lb.addEventListener('click', e=>{ if(e.target.tagName!=='IMG') closeLb(); }); // คลิกพื้นที่มืดเพื่อปิด
-  const onEsc = e=>{ if(e.key==='Escape') closeLb(); };
-  document.addEventListener('keydown', onEsc);
-
-  // ----- นาฬิกานับถอยหลัง -----
-  const ring = document.getElementById('ring');
-  const circ = 2*Math.PI*38;
-  const t0 = performance.now();
   armUnloadGuard();
-  const timer = setInterval(()=>{
-    const elapsed = (performance.now()-t0)/1000;
-    const remain = Math.max(0, total - elapsed);
-    const shown = Math.ceil(remain);
-    document.getElementById('cd').textContent = shown;
-    document.getElementById('cd2').textContent = shown;
-    const lbcd = document.getElementById('cdLb'); if(lbcd) lbcd.textContent = shown;
-    ring.style.strokeDashoffset = (circ * (elapsed/total)).toFixed(1);
-    if(remain<=0){
-      clearInterval(timer);
-      document.removeEventListener('keydown', onEsc);
-      closeLb();
-      state.media_view_sec = +(performance.now()-t0)/1000;
-      state.media_view_sec = +state.media_view_sec.toFixed(2);
-      screenQuizIntro();
+
+  const imgEl   = document.getElementById('mediaImg');
+  const loading = document.getElementById('mediaLoading');
+  const lb      = document.getElementById('lightbox');
+  const onEsc   = e => { if(e.key === 'Escape') closeLb(); };
+  const closeLb = () => lb.classList.remove('open');
+  const openLb  = () => { if(imgEl.style.display !== 'none') lb.classList.add('open'); };
+  let started = false;
+
+  // เตือนเมื่อเครือข่ายช้า (แต่ยังไม่เริ่มจับเวลา — รอจนภาพขึ้นจริง)
+  const slowHint = setTimeout(() => {
+    if(!started){
+      document.getElementById('loadHint').textContent =
+        'เครือข่ายอาจช้ากว่าปกติ กรุณารอสักครู่ — ระบบจะยังไม่เริ่มจับเวลาจนกว่าภาพจะแสดงครบถ้วน';
     }
-  }, 100);
+  }, 8000);
+
+  function startCountdown(){
+    if(started) return;
+    started = true;
+    clearTimeout(slowHint);
+
+    loading.style.display = 'none';
+    imgEl.style.display = '';
+    document.getElementById('timerWrap').style.display = '';
+    document.getElementById('zoomHint').style.display = '';
+    document.getElementById('lockHint').style.display = '';
+
+    // ขยายรูปเต็มจอ
+    imgEl.addEventListener('click', openLb);
+    document.getElementById('zoomHint').addEventListener('click', openLb);
+    document.getElementById('lbClose').addEventListener('click', e => { e.stopPropagation(); closeLb(); });
+    lb.addEventListener('click', e => { if(e.target.tagName !== 'IMG') closeLb(); });
+    document.addEventListener('keydown', onEsc);
+
+    // เริ่มจับเวลา ณ วินาทีที่ภาพพร้อมแสดงผลจริง
+    const ring = document.getElementById('ring');
+    const circ = 2 * Math.PI * 38;
+    const t0 = performance.now();
+    const timer = setInterval(() => {
+      const elapsed = (performance.now() - t0) / 1000;
+      const remain  = Math.max(0, total - elapsed);
+      const shown   = Math.ceil(remain);
+      document.getElementById('cd').textContent  = shown;
+      document.getElementById('cd2').textContent = shown;
+      const lbcd = document.getElementById('cdLb'); if(lbcd) lbcd.textContent = shown;
+      ring.style.strokeDashoffset = (circ * (elapsed / total)).toFixed(1);
+      if(remain <= 0){
+        clearInterval(timer);
+        document.removeEventListener('keydown', onEsc);
+        closeLb();
+        state.media_view_sec = +((performance.now() - t0) / 1000).toFixed(2);
+        screenQuizIntro();
+      }
+    }, 100);
+  }
+
+  function showError(){
+    clearTimeout(slowHint);
+    loading.style.display = 'none';
+    document.getElementById('imgErr').style.display = 'block';
+    document.getElementById('btnImgRetry').addEventListener('click', () => { screenMedia(); });
+  }
+
+  // รอให้ภาพ "โหลดเสร็จและถอดรหัสพร้อมวาด" ก่อนจึงเริ่มนับถอยหลัง
+  if(imgEl.complete && imgEl.naturalWidth > 0){
+    startCountdown();
+  } else {
+    imgEl.addEventListener('load', () => {
+      const ready = imgEl.decode ? imgEl.decode().catch(() => {}) : Promise.resolve();
+      ready.then(startCountdown);
+    });
+    imgEl.addEventListener('error', showError);
+  }
 }
 
 function screenQuizIntro(){
