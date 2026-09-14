@@ -76,7 +76,9 @@ p{margin:.4em 0; font-size:15px; color:var(--muted)}
 (function(){
   var ENDPOINT = "https://script.google.com/macros/s/AKfycbwl085imyqYrk8hev0imEtQpxeZJlPwwu29syWAekDrE4Ts7B0dV9BtAi4P2utc2otW/exec";
   var STORAGE_KEY = "lartsday_group";
-  var TIMEOUT_MS  = 2500;   // ไม่ให้ผู้ตอบรอนานเกินไป
+  // Apps Script ตอบกลับราว 1.9–2.8 วินาทีแม้ในสภาพปกติ จึงเผื่อไว้ที่ 3.2 วินาที
+  // ระหว่างนี้ผู้ตอบได้อ่านข้อความเตรียมตัวด้านล่างไปด้วย เวลาจึงไม่สูญเปล่า
+  var TIMEOUT_MS  = 3200;
   var done = false;
 
   function target(g){ return "index.html?group=" + g; }
@@ -100,7 +102,7 @@ p{margin:.4em 0; font-size:15px; color:var(--muted)}
   // 2) ถามยอดผู้ตอบปัจจุบันของแต่ละกลุ่ม (มีเวลาจำกัด)
   var timer = setTimeout(function(){ go(coinFlip()); }, TIMEOUT_MS);
 
-  fetch(ENDPOINT, { method:'GET' })
+  fetch(ENDPOINT, { method:'GET', cache:'no-store' })
     .then(function(r){ return r.json(); })
     .then(function(j){
       clearTimeout(timer);
