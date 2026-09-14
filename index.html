@@ -672,6 +672,10 @@ function renderQuiz(){
 // --- 3.4 ส่วนที่ 3: ความพึงพอใจ 14 ข้อ / 5 ด้าน ---
 function screenSatisfaction(){
   setStep(4);
+  // ปลุกเซิร์ฟเวอร์ล่วงหน้าตั้งแต่เข้าส่วนนี้ กว่าผู้ตอบจะกดส่งก็อุ่นพร้อมรับข้อมูลแล้ว
+  if(CONFIG.ENDPOINT && !CONFIG.ENDPOINT.startsWith('PASTE_')){
+    try{ fetch(CONFIG.ENDPOINT, { method:'GET', cache:'no-store' }).catch(()=>{}); }catch(_){}
+  }
   const dims = SAT_DIMS.map(d=>{
     const items = d.items.map(it=>`
       <div class="q">
@@ -780,37 +784,56 @@ async function submitAll(){
   setStep(5);
   disarmUnloadGuard();
   const rec = buildRecord();
-  go(`<div class="screen"><div class="card center">
-      <div class="spinner"></div><h2>กำลังบันทึกคำตอบ...</h2>
-      <p class="small">กรุณาอย่าปิดหน้านี้</p></div></div>`);
+  const payload = JSON.stringify(rec);
+  const endpointReady = CONFIG.ENDPOINT && !CONFIG.ENDPOINT.startsWith('PASTE_');
 
-  let ok = false;
-  if(CONFIG.ENDPOINT && !CONFIG.ENDPOINT.startsWith('PASTE_')){
+  // 1) ส่งด้วย sendBeacon ก่อนเป็นอันดับแรก
+  //    เบราว์เซอร์จะรับข้อมูลไปส่งต่อให้เองจนสำเร็จ แม้ผู้ตอบจะปิดแท็บทันทีหลังกดส่ง
+  //    จึงไม่ต้องให้ผู้ตอบนั่งรอเซิร์ฟเวอร์ ซึ่งใช้เวลาราว 3 วินาที
+  let beaconSent = false;
+  if(endpointReady){
     try{
-      // simple request (text/plain) → ไม่มี CORS preflight กับ Apps Script
-      const res = await fetch(CONFIG.ENDPOINT, {
-        method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-        body: JSON.stringify(rec)
-      });
-      ok = res.ok;
-      try{ const j = await res.json(); ok = (j && j.status==='ok') || ok; }catch(_){}
-    }catch(err){
-      // เผื่อ CORS อ่าน response ไม่ได้ → ส่งซ้ำแบบ no-cors (ข้อมูลยังถูกบันทึกที่เซิร์ฟเวอร์)
-      try{
-        await fetch(CONFIG.ENDPOINT,{method:'POST',mode:'no-cors',
-          headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(rec)});
-        ok = true;
-      }catch(e2){ ok=false; }
-    }
+      beaconSent = !!(navigator.sendBeacon &&
+        navigator.sendBeacon(CONFIG.ENDPOINT,
+          new Blob([payload], { type: 'text/plain;charset=UTF-8' })));
+    }catch(_){ beaconSent = false; }
   }
-  ok ? screenDone() : screenError(rec);
+
+  // 2) ขึ้นหน้าขอบคุณทันที ผู้ตอบปิดหน้าจอตอนไหนก็ได้
+  screenDone();
+
+  if(!endpointReady){ screenError(rec); return; }
+
+  // 3) ยืนยันผลเบื้องหลัง — ส่งซ้ำได้อย่างปลอดภัย เพราะเซิร์ฟเวอร์กันซ้ำด้วย respondent_id
+  let ok = false;
+  try{
+    const res = await fetch(CONFIG.ENDPOINT, {
+      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: payload
+    });
+    ok = res.ok;
+    try{ const j = await res.json(); ok = (j && j.status==='ok') || ok; }catch(_){}
+  }catch(err){
+    ok = false;
+  }
+
+  if(ok || beaconSent) markSaveConfirmed();
+  else screenError(rec);   // ส่งไม่สำเร็จจริง ๆ จึงค่อยรบกวนผู้ตอบ
+}
+
+function markSaveConfirmed(){
+  const el = document.getElementById('saveStatus');
+  if(el){
+    el.textContent = 'บันทึกคำตอบเรียบร้อยแล้ว ✓';
+    el.style.color = 'var(--ok)';
+  }
 }
 
 function screenDone(){
   go(`<div class="screen"><div class="card center">
       <div class="check">✓</div>
       <h1>ขอบคุณสำหรับการเข้าร่วม</h1>
-      <p class="lead">ระบบได้บันทึกคำตอบของท่านเรียบร้อยแล้ว<br/>ความร่วมมือของท่านมีคุณค่าอย่างยิ่งต่องานวิจัยนี้</p>
+      <p class="lead">ความร่วมมือของท่านมีคุณค่าอย่างยิ่งต่องานวิจัยนี้<br/>ท่านปิดหน้านี้ได้เลย</p>
+      <p class="small" id="saveStatus" style="font-weight:600">กำลังบันทึกคำตอบ...</p>
       <div class="notice" style="margin-top:18px">งานสื่อสารองค์กรและประชาสัมพันธ์ · คณะศิลปศาสตร์ มหาวิทยาลัยธรรมศาสตร์</div>
     </div></div>`);
 }
