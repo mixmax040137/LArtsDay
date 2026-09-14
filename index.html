@@ -476,6 +476,7 @@ function screenPart1(){
 }
 
 // --- 3.2 ส่วนที่ 2 (ก): รับชมสื่อ 15 วินาที ---
+let mediaRun = 0;   // นับรอบการเข้าหน้าสื่อ ใช้ทำให้ callback ของรอบเก่าเป็นโมฆะ
 function screenMedia(){
   setStep(2);
   const baseImg = GROUP==='A' ? CONFIG.IMAGE_A : CONFIG.IMAGE_B;
@@ -529,17 +530,21 @@ function screenMedia(){
   const closeLb = () => lb.classList.remove('open');
   const openLb  = () => { if(imgEl.style.display !== 'none') lb.classList.add('open'); };
   let started = false;
+  // ทุกครั้งที่เข้าหน้าสื่อใหม่ (เช่นกดปุ่มลองโหลดใหม่) รอบเก่าจะกลายเป็นโมฆะทันที
+  // กันไม่ให้ตัวจับเวลาของรอบเก่าเดินซ้อนหรือสลับหน้าจอของรอบใหม่
+  const myRun = ++mediaRun;
+  const stale = () => myRun !== mediaRun;
 
   // เตือนเมื่อเครือข่ายช้า (แต่ยังไม่เริ่มจับเวลา — รอจนภาพขึ้นจริง)
   const slowHint = setTimeout(() => {
-    if(!started){
+    if(!started && !stale()){
       document.getElementById('loadHint').textContent =
         'เครือข่ายอาจช้ากว่าปกติ กรุณารอสักครู่ — ระบบจะยังไม่เริ่มจับเวลาจนกว่าภาพจะแสดงครบถ้วน';
     }
   }, 8000);
 
   function startCountdown(){
-    if(started) return;
+    if(started || stale()) return;
     started = true;
     clearTimeout(slowHint);
 
@@ -561,6 +566,7 @@ function screenMedia(){
     const circ = 2 * Math.PI * 38;
     const t0 = performance.now();
     const timer = setInterval(() => {
+      if(stale()){ clearInterval(timer); document.removeEventListener('keydown', onEsc); return; }
       const elapsed = (performance.now() - t0) / 1000;
       const remain  = Math.max(0, total - elapsed);
       const shown   = Math.ceil(remain);
@@ -578,23 +584,37 @@ function screenMedia(){
     }, 100);
   }
 
+  let errored = false;
   function showError(){
+    if(started || errored || stale()) return;      // อย่าแสดงซ้ำ และอย่าแสดงหลังเริ่มนับเวลาแล้ว
+    errored = true;
     clearTimeout(slowHint);
     loading.style.display = 'none';
     document.getElementById('imgErr').style.display = 'block';
-    document.getElementById('btnImgRetry').addEventListener('click', () => { screenMedia(); });
+    document.getElementById('btnImgRetry').addEventListener('click', () => { screenMedia(); }, { once: true });
   }
 
-  // รอให้ภาพ "โหลดเสร็จและถอดรหัสพร้อมวาด" ก่อนจึงเริ่มนับถอยหลัง
-  if(imgEl.complete && imgEl.naturalWidth > 0){
-    startCountdown();
-  } else {
-    imgEl.addEventListener('load', () => {
-      const ready = imgEl.decode ? imgEl.decode().catch(() => {}) : Promise.resolve();
-      ready.then(startCountdown);
-    });
-    imgEl.addEventListener('error', showError);
+  // รอให้ภาพโหลดเสร็จก่อนจึงเริ่มนับถอยหลัง
+  // หมายเหตุ: decode() อาจไม่คืนค่าเลยถ้าภาพยังถูกซ่อนอยู่ จึงจำกัดเวลารอไว้ไม่เกิน 1 วินาที
+  // และมีตัวตรวจซ้ำเป็นระยะ เผื่อ event 'load' ยิงก่อนผูก listener ทัน (กรณีภาพมาจาก cache)
+  function whenPainted(){
+    if(started || stale()) return;
+    const capped = imgEl.decode
+      ? Promise.race([ imgEl.decode().catch(()=>{}), new Promise(r => setTimeout(r, 1000)) ])
+      : Promise.resolve();
+    capped.then(startCountdown);
   }
+
+  imgEl.addEventListener('load', whenPainted);
+  imgEl.addEventListener('error', showError);
+
+  const readyPoll = setInterval(() => {
+    if(started){ clearInterval(readyPoll); return; }
+    if(imgEl.complete && imgEl.naturalWidth > 0){ clearInterval(readyPoll); whenPainted(); }
+    else if(imgEl.complete && imgEl.naturalWidth === 0){ clearInterval(readyPoll); showError(); }
+  }, 200);
+
+  if(imgEl.complete && imgEl.naturalWidth > 0) whenPainted();
 }
 
 function screenQuizIntro(){
